@@ -1,9 +1,9 @@
+
 import os
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pymysql
@@ -186,45 +186,90 @@ def health_check() -> Dict[str, str]:
     """
     return {"status": "ok", "message": "Server is running"}
 
-@app.get("/api/v1/landings-buckets", response_model=List[Dict[str, Any]])
-def get_landings_buckets(
-    token: Optional[str] = None,
-    id: Optional[str] = None
-) -> List[Dict[str, Any]]:
+from fastapi import Query, Path
+
+# New endpoint: Get a single landing-bucket by UUID
+@app.get("/api/v1/landings-buckets/{id}")
+def get_landing_bucket_by_id(id: str = Path(..., description="UUID de la landing")) -> Dict[str, Any]:
     """
-    Consulta todos los registros disponibles en la vista view_Landings_Buckets.
-    Permite filtrar opcionalmente por usuario resolviendo el Token o por UUID de landing (id).
+    Obtiene un solo registro de la vista view_Landings_Buckets por uuid_landing.
+    """
+    # Validar formato UUID
+    try:
+        uuid.UUID(id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Bad Request",
+                "message": "id no tiene un formato UUID válido."
+            }
+        )
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = "SELECT * FROM view_Landings_Buckets WHERE uuid_landing = %s;"
+            cursor.execute(sql, (id,))
+            result = cursor.fetchone()
+            if not result:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "Not Found",
+                        "message": f"No se encontró ninguna landing con uuid_landing: {id}"
+                    }
+                )
+            return result
+    except pymysql.MySQLError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal Server Error",
+                "message": "Error al consultar la vista de landings y buckets.",
+                "details": str(e)
+            }
+        )
+    finally:
+        connection.close()
+
+# Refactored endpoint: Paginated list for user's landings-buckets
+@app.get("/api/v1/landings-buckets")
+def get_landings_buckets(
+    token: str = Query(..., description="Token de usuario para filtrar landings"),
+    page: int = Query(1, ge=1, description="Número de página (empezando en 1)"),
+    page_size: int = Query(7, ge=1, le=100, description="Cantidad de filas por página (fijo en 7)")
+) -> Dict[str, Any]:
+    """
+    Devuelve una lista paginada de landings-buckets para el usuario identificado por token.
+    Estructura de respuesta:
+    {
+      "TotalRows": <int>,
+      "currentPage": <int>,
+      "items": [ ... ]
+    }
     """
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            if id is not None:
-                # Validar formato UUID y buscar por uuid_landing
-                try:
-                    uuid.UUID(id)
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Bad Request",
-                            "message": "id no tiene un formato UUID válido."
-                        }
-                    )
-                sql = "SELECT * FROM view_Landings_Buckets WHERE uuid_landing = %s;"
-                cursor.execute(sql, (id,))
-            elif token is not None:
-                # Resolver UserID a partir del Token
-                user_id = get_user_id_from_token(cursor, token)
-                # Consulta filtrada con parámetro estricto para evitar SQLi (security-audit)
-                sql = "SELECT * FROM view_Landings_Buckets WHERE UserID = %s;"
-                cursor.execute(sql, (user_id,))
-            else:
-                # Consulta genérica
-                sql = "SELECT * FROM view_Landings_Buckets;"
-                cursor.execute(sql)
-                
-            results: List[Dict[str, Any]] = cursor.fetchall()
-            return results
+            # Resolver UserID a partir del Token
+            user_id = get_user_id_from_token(cursor, token)
+
+            # Total count (for pagination UI)
+            count_sql = "SELECT COUNT(*) as total FROM view_Landings_Buckets WHERE UserID = %s;"
+            cursor.execute(count_sql, (user_id,))
+            total_rows = cursor.fetchone()["total"]
+
+            # Pagination
+            offset = (page - 1) * page_size
+            sql = "SELECT * FROM view_Landings_Buckets WHERE UserID = %s LIMIT %s OFFSET %s;"
+            cursor.execute(sql, (user_id, page_size, offset))
+            items = cursor.fetchall()
+
+            return {
+                "TotalRows": total_rows,
+                "currentPage": page,
+                "items": items
+            }
     except pymysql.MySQLError as e:
         raise HTTPException(
             status_code=500,
