@@ -255,13 +255,13 @@ def get_landings_buckets(
             user_id = get_user_id_from_token(cursor, token)
 
             # Total count (for pagination UI)
-            count_sql = "SELECT COUNT(*) as total FROM view_Landings_Buckets WHERE UserID = %s;"
+            count_sql = "SELECT COUNT(*) as total FROM view_Landings_Buckets WHERE UserID = %s AND URL_s3_final IS NOT NULL;"
             cursor.execute(count_sql, (user_id,))
             total_rows = cursor.fetchone()["total"]
 
             # Pagination
             offset = (page - 1) * page_size
-            sql = "SELECT * FROM view_Landings_Buckets WHERE UserID = %s LIMIT %s OFFSET %s;"
+            sql = "SELECT * FROM view_Landings_Buckets WHERE UserID = %s AND URL_s3_final IS NOT NULL LIMIT %s OFFSET %s;"
             cursor.execute(sql, (user_id, page_size, offset))
             items = cursor.fetchall()
 
